@@ -3,16 +3,12 @@
 
 #[cfg(feature = "std")]
 use crate::file::{impl_osdp_file_ops_for, OsdpFile, OsdpFileOps};
-use crate::{
-    commands::OsdpCommand, events::OsdpEvent, OsdpError, OsdpFlag, PdCapability, PdId, PdInfo,
-};
+use crate::{OsdpCommand, OsdpError, OsdpEvent, OsdpFlag, PdCapability, PdId, PdInfo};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use log::{debug, error, info, warn};
 
 type Result<T> = core::result::Result<T, OsdpError>;
-type EventCallback =
-    unsafe extern "C" fn(data: *mut c_void, pd: i32, event: *mut libosdp_sys::osdp_event) -> i32;
 
 unsafe extern "C" fn log_handler(
     log_level: ::core::ffi::c_int,
@@ -35,22 +31,21 @@ unsafe extern "C" fn log_handler(
     };
 }
 
-unsafe extern "C" fn trampoline<F>(
-    data: *mut c_void,
-    pd: i32,
-    event: *mut libosdp_sys::osdp_event,
-) -> i32
+extern "C" fn trampoline<F>(data: *mut c_void, pd: i32, event: *mut libosdp_sys::osdp_event) -> i32
 where
-    F: Fn(i32, OsdpEvent) -> i32,
+    F: FnMut(i32, OsdpEvent) -> i32,
 {
-    let event: OsdpEvent = (*event).into();
-    let callback = &mut *(data as *mut F);
+    let event: OsdpEvent = unsafe { (*event).into() };
+    let callback: &mut F = unsafe { &mut *(data as *mut F) };
     callback(pd, event)
 }
 
+type EventCallback =
+    unsafe extern "C" fn(data: *mut c_void, pd: i32, event: *mut libosdp_sys::osdp_event) -> i32;
+
 fn get_trampoline<F>(_closure: &F) -> EventCallback
 where
-    F: Fn(i32, OsdpEvent) -> i32,
+    F: FnMut(i32, OsdpEvent) -> i32,
 {
     trampoline::<F>
 }
@@ -78,11 +73,13 @@ impl ControlPanel {
     ///
     /// # Example
     ///
-    /// ```
-    /// use libosdp::{PdInfo, OsdpFlag, channel::{OsdpChannel, UnixChannel},
-    ///               cp::ControlPanel, commands::OsdpCommand};
+    /// ```no_run
+    /// use libosdp::{
+    ///     PdInfo, OsdpFlag, channel::{OsdpChannel, UnixChannel},
+    ///     ControlPanel, OsdpCommand
+    /// };
     ///
-    /// let stream = UnixChannel::connect("conn-1");
+    /// let stream = UnixChannel::connect("conn-1").unwrap();
     /// let pd_info = vec![
     ///     PdInfo::for_cp(
     ///         "PD 101", 101,
@@ -95,7 +92,7 @@ impl ControlPanel {
     ///         ]
     ///     ),
     /// ];
-    /// let mut cp = ControlPanel::new(pd_info)?;
+    /// let mut cp = ControlPanel::new(pd_info).unwrap();
     /// ```
     pub fn new(pd_info: Vec<PdInfo>) -> Result<Self> {
         if pd_info.len() > 126 {
@@ -129,13 +126,16 @@ impl ControlPanel {
     }
 
     /// Set a closure that gets called when a PD sends an event to this CP.
-    pub fn set_event_callback(&mut self, mut closure: impl Fn(i32, OsdpEvent) -> i32) {
-        let callback = get_trampoline(&closure);
+    pub fn set_event_callback<F>(&mut self, closure: F)
+    where
+        F: FnMut(i32, OsdpEvent) -> i32,
+    {
         unsafe {
+            let callback = get_trampoline(&closure);
             libosdp_sys::osdp_cp_set_event_callback(
                 self.ctx,
                 Some(callback),
-                &mut closure as *mut _ as *mut c_void,
+                Box::into_raw(Box::new(closure)).cast(),
             );
         }
     }
