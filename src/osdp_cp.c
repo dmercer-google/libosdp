@@ -502,7 +502,7 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 			status_mask |= !!buf[pos++] << i;
 		}
 		event.type = OSDP_EVENT_STATUS;
-		event.status.type = OSDP_EVENT_STATUS_TYPE_OUTPUT;
+		event.status.type = OSDP_STATUS_REPORT_OUTPUT;
 		event.status.nr_entries = len;
 		event.status.mask = status_mask;
 		memcpy(pd->ephemeral_data, &event, sizeof(event));
@@ -522,7 +522,7 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 			status_mask |= !!buf[pos++] << i;
 		}
 		event.type = OSDP_EVENT_STATUS;
-		event.status.type = OSDP_EVENT_STATUS_TYPE_INPUT;
+		event.status.type = OSDP_STATUS_REPORT_INPUT;
 		event.status.nr_entries = len;
 		event.status.mask = status_mask;
 		memcpy(pd->ephemeral_data, &event, sizeof(event));
@@ -535,7 +535,7 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 			break;
 		}
 		event.type = OSDP_EVENT_STATUS;
-		event.status.type = OSDP_EVENT_STATUS_TYPE_LOCAL;
+		event.status.type = OSDP_STATUS_REPORT_LOCAL;
 		event.status.nr_entries = 2;
 		event.status.mask = !!buf[pos++];
 		event.status.mask = !!buf[pos++] << 1;
@@ -548,7 +548,7 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 			break;
 		}
 		event.type = OSDP_EVENT_STATUS;
-		event.status.type = OSDP_EVENT_STATUS_TYPE_REMOTE;
+		event.status.type = OSDP_STATUS_REPORT_REMOTE;
 		event.status.nr_entries = 1;
 		event.status.mask = !!buf[pos++];
 		memcpy(pd->ephemeral_data, &event, sizeof(event));
@@ -677,7 +677,6 @@ static int cp_decode_response(struct osdp_pd *pd, uint8_t *buf, int len)
 			break;
 		}
 		memcpy(pd->sc.r_mac, buf + pos, 16);
-		sc_activate(pd);
 		ret = OSDP_CP_ERR_NONE;
 		break;
 	default:
@@ -790,10 +789,10 @@ int cp_translate_cmd(struct osdp_pd *pd, struct osdp_cmd *cmd)
 	case OSDP_CMD_MFG:    return CMD_MFG;
 	case OSDP_CMD_STATUS:
 		switch (cmd->status.type) {
-		case OSDP_CMD_STATUS_QUERY_INPUT:  return CMD_ISTAT;
-		case OSDP_CMD_STATUS_QUERY_OUTPUT: return CMD_OSTAT;
-		case OSDP_CMD_STATUS_QUERY_LOCAL:  return CMD_LSTAT;
-		case OSDP_CMD_STATUS_QUERY_REMOTE: return CMD_RSTAT;
+		case OSDP_STATUS_REPORT_INPUT:  return CMD_ISTAT;
+		case OSDP_STATUS_REPORT_OUTPUT: return CMD_OSTAT;
+		case OSDP_STATUS_REPORT_LOCAL:  return CMD_LSTAT;
+		case OSDP_STATUS_REPORT_REMOTE: return CMD_RSTAT;
 		default: return -1;
 		}
 	case OSDP_CMD_KEYSET:
@@ -1008,8 +1007,8 @@ static inline bool state_check_reply(struct osdp_pd *pd)
 	switch (state) {
 	case OSDP_CP_STATE_INIT:      return pd->reply_id == REPLY_PDID;
 	case OSDP_CP_STATE_CAPDET:    return pd->reply_id == REPLY_PDCAP;
-	case OSDP_CP_STATE_SC_SCRYPT: return pd->reply_id == REPLY_RMAC_I;
 	case OSDP_CP_STATE_SC_CHLNG:  return pd->reply_id == REPLY_CCRYPT;
+	case OSDP_CP_STATE_SC_SCRYPT: return pd->reply_id == REPLY_RMAC_I;
 	case OSDP_CP_STATE_SET_SCBK:  return pd->reply_id == REPLY_ACK;
 	case OSDP_CP_STATE_ONLINE:    return cp_check_online_response(pd);
 	default: return false;
@@ -1152,6 +1151,9 @@ static void cp_state_change(struct osdp_pd *pd, enum osdp_cp_state_e next)
 		}
 		break;
 	case OSDP_CP_STATE_ONLINE:
+		if (cur == OSDP_CP_STATE_SC_SCRYPT) {
+			sc_activate(pd);
+		}
 		pd->wait_ms = 0;
 		LOG_INF("Online; %s SC", sc_is_active(pd) ? "With" : "Without");
 		break;

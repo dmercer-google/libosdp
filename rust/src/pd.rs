@@ -7,9 +7,12 @@
 //! happens on the PD itself (such as card read, key press, etc.,) snd sends it
 //! to the CP.
 
+use crate::types::{PdCapability, PdInfo};
 #[cfg(feature = "std")]
-use crate::file::{impl_osdp_file_ops_for, OsdpFile, OsdpFileOps};
-use crate::{commands::OsdpCommand, events::OsdpEvent, OsdpError, PdCapability, PdInfo};
+use crate::{
+    file::{impl_osdp_file_ops_for, OsdpFile, OsdpFileOps},
+    OsdpCommand, OsdpError, OsdpEvent,
+};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use log::{debug, error, info, warn};
@@ -39,18 +42,18 @@ unsafe extern "C" fn log_handler(
     };
 }
 
-unsafe extern "C" fn trampoline<F>(data: *mut c_void, cmd: *mut libosdp_sys::osdp_cmd) -> i32
+extern "C" fn trampoline<F>(data: *mut c_void, cmd: *mut libosdp_sys::osdp_cmd) -> i32
 where
-    F: Fn(OsdpCommand) -> i32,
+    F: FnMut(OsdpCommand) -> i32,
 {
-    let cmd: OsdpCommand = (*cmd).into();
-    let callback = &mut *(data as *mut F);
+    let cmd: OsdpCommand = unsafe { (*cmd).into() };
+    let callback: &mut F = unsafe { &mut *(data as *mut F) };
     callback(cmd)
 }
 
 fn get_trampoline<F>(_closure: &F) -> CommandCallback
 where
-    F: Fn(OsdpCommand) -> i32,
+    F: FnMut(OsdpCommand) -> i32,
 {
     trampoline::<F>
 }
@@ -79,23 +82,21 @@ impl PeripheralDevice {
     ///
     /// # Example
     ///
-    /// ```
+    /// ```no_run
     /// use libosdp::{
     ///     PdInfo, PdId, PdCapability, PdCapEntity, OsdpFlag,
-    ///     channel::{OsdpChannel, UnixChannel},
-    ///     pd::PeripheralDevice,
+    ///     channel::{OsdpChannel, UnixChannel}, ControlPanel,
     /// };
     ///
-    /// let stream = UnixChannel::new("conn-1");
+    /// let stream = UnixChannel::new("conn-1").unwrap();
     /// let pd_info = vec![
     ///     PdInfo::for_pd(
-    ///         "PD 101", 101,
-    ///         115200,
+    ///         "PD 101", 101, 115200,
+    ///         OsdpFlag::EnforceSecure,
     ///         PdId::from_number(101),
     ///         vec![
     ///             PdCapability::CommunicationSecurity(PdCapEntity::new(1, 1)),
     ///         ],
-    ///         OsdpFlag::EnforceSecure,
     ///         OsdpChannel::new::<UnixChannel>(Box::new(stream)),
     ///         [
     ///             0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
@@ -103,7 +104,7 @@ impl PeripheralDevice {
     ///         ]
     ///     ),
     /// ];
-    /// let mut cp = PeripheralDevice::new(pd_info)?;
+    /// let mut cp = ControlPanel::new(pd_info).unwrap();
     /// ```
     pub fn new(info: PdInfo) -> Result<Self> {
         unsafe { libosdp_sys::osdp_set_log_callback(Some(log_handler)) };
@@ -147,13 +148,16 @@ impl PeripheralDevice {
 
     /// Set a closure that gets called when this PD receives a command from the
     /// CP.
-    pub fn set_command_callback(&mut self, mut closure: impl Fn(OsdpCommand) -> i32) {
-        let callback = get_trampoline(&closure);
+    pub fn set_command_callback<F>(&mut self, closure: F)
+    where
+        F: FnMut(OsdpCommand) -> i32,
+    {
         unsafe {
+            let callback = get_trampoline(&closure);
             libosdp_sys::osdp_pd_set_command_callback(
                 self.ctx,
                 Some(callback),
-                &mut closure as *mut _ as *mut c_void,
+                Box::into_raw(Box::new(closure)).cast(),
             )
         }
     }
